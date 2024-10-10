@@ -11,6 +11,15 @@ bot = commands.Bot(command_prefix='>', intents=intents)
 
 # Dictionary to store user balances
 user_balances = {}
+# Dictionary to store stock data
+stock_prices = {
+    'apple': 100,
+    'tesla': 150,
+    'google': 200,
+}
+
+# Dictionary to store user stocks
+user_stocks = {}
 
 @bot.event
 async def on_ready():
@@ -18,6 +27,7 @@ async def on_ready():
     # Start the hourly tax task when the bot is ready
     channel = bot.get_channel(1274038617702006888)  # Replace with your channel ID
     bot.loop.create_task(hourly_tax(channel))
+    bot.loop.create_task(update_stock_prices())
 
 async def hourly_tax(channel):
     while True:
@@ -47,6 +57,15 @@ async def hourly_tax(channel):
 
         await asyncio.sleep(300)  # Run every 5 minutes (300 seconds)
 
+async def update_stock_prices():
+    while True:
+        # Randomly fluctuate stock prices between -10% to +10%
+        for stock in stock_prices:
+            change_percent = random.uniform(-0.1, 0.1)  # -10% to +10%
+            stock_prices[stock] = max(1, int(stock_prices[stock] * (1 + change_percent)))
+
+        await asyncio.sleep(600)  # Update every 10 minutes
+
 @bot.command(name='beg')
 async def beg(ctx):
     user_id = str(ctx.author.id)  # Store user ID as a string for JSON compatibility
@@ -72,7 +91,7 @@ async def beg(ctx):
     d[user_id]["money"] += amount
 
     # Save changes to data.json
-    with open("data.json", "w") as f:
+    with open(".data.json", "w") as f:
         json.dump(d, f, indent=4)
 
     await ctx.send(f"{ctx.author.name} begged and received ${amount}.")
@@ -164,6 +183,75 @@ async def give(ctx, member: discord.Member, amount: int):
         json.dump(d, f, indent=4)
 
     await ctx.send(f"{ctx.author.name} gave ${amount} to {member.name}.")
+
+@bot.command(name='stock')
+async def stock(ctx, action: str, stock_name: str = None, amount: int = None):
+    user_id = str(ctx.author.id)
+
+    if action == 'check':
+        # Display the current stock prices
+        prices = [f"{stock}: ${price}" for stock, price in stock_prices.items()]
+        await ctx.send("\n".join(prices))
+    elif action == 'buy':
+        if stock_name not in stock_prices:
+            await ctx.send("Invalid stock name!")
+            return
+        if amount is None or amount <= 0:
+            await ctx.send("You must specify a valid number of stocks to buy!")
+            return
+
+        total_cost = stock_prices[stock_name] * amount
+
+        # Check if user has enough money to buy stocks
+        if user_balances.get(user_id, 0) < total_cost:
+            await ctx.send("You don't have enough money to buy these stocks!")
+            return
+
+        # Deduct money and add stocks
+        user_balances[user_id] -= total_cost
+        if user_id not in user_stocks:
+            user_stocks[user_id] = {}
+        user_stocks[user_id][stock_name] = user_stocks[user_id].get(stock_name, 0) + amount
+
+        await ctx.send(f"{ctx.author.name} bought {amount} shares of {stock_name} for ${total_cost}.")
+    elif action == 'sell':
+        if stock_name not in stock_prices:
+            await ctx.send("Invalid stock name!")
+            return
+        if amount is None or amount <= 0:
+            await ctx.send("You must specify a valid number of stocks to sell!")
+            return
+
+        # Check if the user owns enough stocks to sell
+        if user_stocks.get(user_id, {}).get(stock_name, 0) < amount:
+            await ctx.send("You don't have enough stocks to sell!")
+            return
+
+        total_gain = stock_prices[stock_name] * amount
+
+        # Add money and remove stocks
+        user_balances[user_id] += total_gain
+        user_stocks[user_id][stock_name] -= amount
+        if user_stocks[user_id][stock_name] == 0:
+            del user_stocks[user_id][stock_name]  # Remove stock if 0
+
+        await ctx.send(f"{ctx.author.name} sold {amount} shares of {stock_name} for ${total_gain}.")
+    else:
+        await ctx.send("Invalid action! Use 'check', 'buy', or 'sell'.")
+
+@bot.command(name='help')
+async def help_command(ctx):
+    help_message = """
+    **Available Commands:**
+    >beg - Beg for money and receive a random amount.
+    >bank - Check your current balance.
+    >slots - Play slots for $10. Win random rewards.
+    >give [user] [amount] - Give a user some money.
+    >stock check - Check current stock prices.
+    >stock buy [stock_name] [amount] - Buy stocks.
+    >stock sell [stock_name] [amount] - Sell stocks.
+    """
+    await ctx.send(help_message)
 
 # Your actual bot token
 bot.run("YOUR_BOT_TOKEN_HERE")  # <- Your token here

@@ -91,7 +91,7 @@ async def beg(ctx):
     d[user_id]["money"] += amount
 
     # Save changes to data.json
-    with open(".data.json", "w") as f:
+    with open("data.json", "w") as f:
         json.dump(d, f, indent=4)
 
     await ctx.send(f"{ctx.author.name} begged and received ${amount}.")
@@ -239,6 +239,39 @@ async def stock(ctx, action: str, stock_name: str = None, amount: int = None):
     else:
         await ctx.send("Invalid action! Use 'check', 'buy', or 'sell'.")
 
+@bot.command(name='gamble')
+async def gamble(ctx, amount: int):
+    user_id = str(ctx.author.id)
+
+    # Ensure the amount is positive
+    if amount <= 0:
+        await ctx.send("You must gamble a positive amount!")
+        return
+
+    # Check if user has enough money to gamble
+    if user_balances.get(user_id, 0) < amount:
+        await ctx.send("You don't have enough money to gamble!")
+        return
+
+    # Deduct the amount from user's balance
+    user_balances[user_id] -= amount
+
+    # 50% chance of getting nothing, 12.5% chance of breaking even, 12.5% chance of doubling the amount
+    result = random.choices(
+        ['lose', 'break_even', 'double'],
+        [0.75, 0.125, 0.125],  # Probabilities
+        k=1
+    )[0]
+
+    if result == 'lose':
+        await ctx.send(f"{ctx.author.name} gambled ${amount} and lost it all!")
+    elif result == 'break_even':
+        user_balances[user_id] += amount  # Return the original amount
+        await ctx.send(f"{ctx.author.name} gambled ${amount} and broke even!")
+    elif result == 'double':
+        user_balances[user_id] += amount * 2  # Double the amount
+        await ctx.send(f"{ctx.author.name} gambled ${amount} and won ${amount * 2}!")
+
 @bot.command(name='help')
 async def help_command(ctx):
     help_message = """
@@ -250,6 +283,7 @@ async def help_command(ctx):
     >stock check - Check current stock prices.
     >stock buy [stock_name] [amount] - Buy stocks.
     >stock sell [stock_name] [amount] - Sell stocks.
+    >gamble [amount] - Gamble an amount with a chance to lose or double it.
     """
     await ctx.send(help_message)
 

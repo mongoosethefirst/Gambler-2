@@ -1,0 +1,7 @@
+1. Sign up to Discord Developer Portal
+2. Create a bot with admin privilages
+3. Get bot token
+4. Using python software of your choice, copy the code into the software.
+5. Replace "YOUR_BOT_TOKEN_HERE" with your generated bot token.
+6. Add the bot to your discord server.
+7. You're ready to go!

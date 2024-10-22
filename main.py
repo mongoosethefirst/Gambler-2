@@ -2,290 +2,213 @@ import discord
 import random
 import json
 import asyncio
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+# Enable necessary intents
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
+intents.members = True
 
 bot = commands.Bot(command_prefix='>', intents=intents)
 
-# Dictionary to store user balances
-user_balances = {}
-# Dictionary to store stock data
-stock_prices = {
-    'apple': 100,
-    'tesla': 150,
-    'google': 200,
-}
+# File names for persistence
+BALANCE_FILE = 'user_balances.json'
+SUGGESTIONS_FILE = 'user_suggestions.json'
+STOCKS_FILE = 'user_stocks.json'
 
-# Dictionary to store user stocks
-user_stocks = {}
+def load_data(filename):
+    try:
+        with open(filename, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_data(filename, data):
+    with open(filename, 'w') as f:
+        json.dump(data, f)
+
+user_balances = load_data(BALANCE_FILE)
+user_suggestions = load_data(SUGGESTIONS_FILE)
+user_stocks = load_data(STOCKS_FILE)
+user_cooldowns = {}
+
+def round_to_cents(value):
+    return round(value, 2)
+
+def get_user_balance(user_id):
+    return round_to_cents(user_balances.get(user_id, 0))
+
+def set_user_balance(user_id, amount):
+    user_balances[user_id] = round_to_cents(amount)
+    save_data(BALANCE_FILE, user_balances)
+
+async def cooldown_check(ctx):
+    user_id = ctx.author.id
+    last_command = user_cooldowns.get(user_id, 0)
+    elapsed = asyncio.get_event_loop().time() - last_command
+
+    if elapsed < 3:
+        await ctx.send(f"Please wait {round(3 - elapsed, 1)} more seconds.")
+        return False
+
+    user_cooldowns[user_id] = asyncio.get_event_loop().time()
+    return True
 
 @bot.event
 async def on_ready():
     print(f'Logged on as {bot.user}!')
-    # Start the hourly tax task when the bot is ready
-    channel = bot.get_channel(1274038617702006888)  # Replace with your channel ID
-    bot.loop.create_task(hourly_tax(channel))
-    bot.loop.create_task(update_stock_prices())
+    hourly_rewards.start()  # Start the hourly rewards task
 
-async def hourly_tax(channel):
-    while True:
-        # Check if data.json exists, create it if it doesn't
-        try:
-            with open("data.json", "r") as f:
-                d = json.load(f)
-        except FileNotFoundError:
-            d = {}  # Start with an empty dictionary if the file doesn't exist
-
-        # Apply tax to each user
-        for user_id, user_data in d.items():
-            if "money" in user_data:  # Ensure the 'money' key exists
-                tax = int(user_data["money"] * 0.02)  # 2% tax on the user's current money
-                user_data["money"] -= tax
-
-                # Fetch the member by ID to get the username
-                member = channel.guild.get_member(int(user_id))
-                if member:
-                    await channel.send(f"{member.name}, you lost ${tax} as tax!")
-                else:
-                    await channel.send(f"User with ID {user_id} is not in the server.")
-
-        # Save changes to data.json
-        with open("data.json", "w") as f:
-            json.dump(d, f, indent=4)
-
-        await asyncio.sleep(300)  # Run every 5 minutes (300 seconds)
-
-async def update_stock_prices():
-    while True:
-        # Randomly fluctuate stock prices between -10% to +10%
-        for stock in stock_prices:
-            change_percent = random.uniform(-0.1, 0.1)  # -10% to +10%
-            stock_prices[stock] = max(1, int(stock_prices[stock] * (1 + change_percent)))
-
-        await asyncio.sleep(600)  # Update every 10 minutes
-
-@bot.command(name='beg')
-async def beg(ctx):
-    user_id = str(ctx.author.id)  # Store user ID as a string for JSON compatibility
-
-    amount = random.randint(1, 20)  # Random amount between 1 and 20
-
-    # Update the user's balance
-    if user_id in user_balances:
-        user_balances[user_id] += amount
+    channel = discord.utils.get(bot.get_all_channels(), name='general')
+    if channel:
+        await channel.send("Hello, World! State: Online")
     else:
-        user_balances[user_id] = amount
+        print("Channel not found. Make sure you have the correct channel name.")
 
-    # Load user data from data.json to update the file
-    try:
-        with open("data.json", "r") as f:
-            d = json.load(f)
-    except FileNotFoundError:
-        d = {}
+@tasks.loop(hours=1)
+async def hourly_rewards():
+    """Give each user $150 every hour."""
+    for user_id in user_balances.keys():
+        set_user_balance(user_id, get_user_balance(user_id) + 150)
+    print("Hourly rewards distributed.")
 
-    # Update user balance in data
-    if user_id not in d:
-        d[user_id] = {"money": 0}
-    d[user_id]["money"] += amount
-
-    # Save changes to data.json
-    with open("data.json", "w") as f:
-        json.dump(d, f, indent=4)
-
-    await ctx.send(f"{ctx.author.name} begged and received ${amount}.")
+@bot.command(name='commands')
+async def commands(ctx):
+    command_list = """
+**Available Commands:**
+1. **>bank** - Check your bank balance.
+2. **>beg** - Beg for some money.
+3. **>slots** - Play slots for $10.
+4. **>checkstock** - Check available stocks and their prices.
+5. **>buystock <stock_name> <amount>** - Buy shares of a stock.
+6. **>sellstock <stock_name> <amount>** - Sell shares of a stock.
+7. **>suggestion <your suggestion>** - Suggest something for the server.
+8. **>ranks** - View the top users by balance.
+9. **>coinflip <bet> <heads/tails>** - Play a coin flip game to double or lose your money.
+10. **>commands** - Display this list of commands.
+"""
+    await ctx.send(command_list)
 
 @bot.command(name='bank')
 async def bank(ctx):
-    user_id = str(ctx.author.id)  # Store user ID as a string for JSON compatibility
-    balance = user_balances.get(user_id, 0)  # Default to 0 if user not found
+    if not await cooldown_check(ctx):
+        return
 
+    user_id = str(ctx.author.id)
+    balance = get_user_balance(user_id)
     await ctx.send(f"{ctx.author.name}'s Bank Balance: ${balance}.")
+
+@bot.command(name='beg')
+async def beg(ctx):
+    if not await cooldown_check(ctx):
+        return
+
+    user_id = str(ctx.author.id)
+    amount = random.randint(1, 20)
+    set_user_balance(user_id, get_user_balance(user_id) + amount)
+    await ctx.send(f"{ctx.author.name} begged and received ${amount}!")
 
 @bot.command(name='slots')
 async def slots(ctx):
-    user_id = str(ctx.author.id)
+    if not await cooldown_check(ctx):
+        return
 
-    # Check if user has enough money to play
-    if user_balances.get(user_id, 0) < 10:
+    user_id = str(ctx.author.id)
+    if get_user_balance(user_id) < 10:
         await ctx.send("You don't have enough money to play slots! It costs $10.")
         return
 
-    # Deduct $10 from the user's balance
-    user_balances[user_id] -= 10
-
-    # Load user data from data.json to update the file
-    try:
-        with open("data.json", "r") as f:
-            d = json.load(f)
-    except FileNotFoundError:
-        d = {}
-
-    if user_id not in d:
-        d[user_id] = {"money": 0}
-    d[user_id]["money"] = user_balances[user_id]
-
-    # Define the reward probabilities
+    set_user_balance(user_id, get_user_balance(user_id) - 10)
     rewards = [0] * 50 + [5] * 25 + [10] * 10 + [50] * 5 + [100, 150, 200, 250, 300, 350, 400, 450, 500, 550]
     reward = random.choice(rewards)
-
-    # Add the reward to the user's balance
-    user_balances[user_id] += reward
-    d[user_id]["money"] += reward
-
-    # Save changes to data.json
-    with open("data.json", "w") as f:
-        json.dump(d, f, indent=4)
+    set_user_balance(user_id, get_user_balance(user_id) + reward)
 
     await ctx.send(f"{ctx.author.name} rolled slots and got ${reward}!")
 
-@bot.command(name='give')
-async def give(ctx, member: discord.Member, amount: int):
-    giver_id = str(ctx.author.id)
-    receiver_id = str(member.id)
-
-    # Ensure the amount is positive
-    if amount <= 0:
-        await ctx.send("You must give a positive amount!")
+@bot.command(name='coinflip')
+async def coinflip(ctx, bet: int, choice: str):
+    if not await cooldown_check(ctx):
         return
 
-    # Check if the giver has enough money
-    if user_balances.get(giver_id, 0) < amount:
-        await ctx.send("You don't have enough money to give!")
+    user_id = str(ctx.author.id)
+    choice = choice.lower()
+
+    if choice not in ["heads", "tails"]:
+        await ctx.send("Invalid choice! Please choose 'heads' or 'tails'.")
         return
 
-    # Deduct the amount from the giver's balance and add it to the receiver's
-    user_balances[giver_id] -= amount
-    if receiver_id in user_balances:
-        user_balances[receiver_id] += amount
+    if get_user_balance(user_id) < bet:
+        await ctx.send("You don't have enough money to make that bet.")
+        return
+
+    outcome = random.choice(["heads", "tails"])
+
+    if choice == outcome:
+        winnings = bet * 2
+        set_user_balance(user_id, get_user_balance(user_id) + winnings)
+        await ctx.send(f"It's {outcome}! 🎉 You won ${winnings}!")
     else:
-        user_balances[receiver_id] = amount
+        set_user_balance(user_id, get_user_balance(user_id) - bet)
+        await ctx.send(f"It's {outcome}. You lost ${bet}. Better luck next time!")
 
-    # Update data.json for both users
-    try:
-        with open("data.json", "r") as f:
-            d = json.load(f)
-    except FileNotFoundError:
-        d = {}
+@bot.command(name='checkstock')
+async def checkstock(ctx):
+    stocks = {
+        "apple": 175.54, "google": 138.12, "amazon": 129.43,
+        "microsoft": 327.41, "tesla": 254.31
+    }
 
-    if giver_id in d:
-        d[giver_id]["money"] = user_balances[giver_id]
-    else:
-        d[giver_id] = {"money": user_balances[giver_id]}
+    stock_list = "**Available Stocks and Prices:**\n"
+    for stock, price in stocks.items():
+        stock_list += f"{stock.capitalize()}: ${price}\n"
 
-    if receiver_id in d:
-        d[receiver_id]["money"] = user_balances[receiver_id]
-    else:
-        d[receiver_id] = {"money": user_balances[receiver_id]}
+    await ctx.send(stock_list)
 
-    with open("data.json", "w") as f:
-        json.dump(d, f, indent=4)
-
-    await ctx.send(f"{ctx.author.name} gave ${amount} to {member.name}.")
-
-@bot.command(name='stock')
-async def stock(ctx, action: str, stock_name: str = None, amount: int = None):
+@bot.command(name='buystock')
+async def buystock(ctx, stock_name: str, amount: int):
+    stocks = {"apple": 175.54, "google": 138.12}
     user_id = str(ctx.author.id)
 
-    if action == 'check':
-        # Display the current stock prices
-        prices = [f"{stock}: ${price}" for stock, price in stock_prices.items()]
-        await ctx.send("\n".join(prices))
-    elif action == 'buy':
-        if stock_name not in stock_prices:
-            await ctx.send("Invalid stock name!")
-            return
-        if amount is None or amount <= 0:
-            await ctx.send("You must specify a valid number of stocks to buy!")
-            return
+    if stock_name.lower() not in stocks:
+        await ctx.send("Invalid stock name.")
+        return
 
-        total_cost = stock_prices[stock_name] * amount
+    total_cost = stocks[stock_name.lower()] * amount
+    if get_user_balance(user_id) < total_cost:
+        await ctx.send("You don't have enough money.")
+        return
 
-        # Check if user has enough money to buy stocks
-        if user_balances.get(user_id, 0) < total_cost:
-            await ctx.send("You don't have enough money to buy these stocks!")
-            return
+    set_user_balance(user_id, get_user_balance(user_id) - total_cost)
+    await ctx.send(f"Bought {amount} shares of {stock_name.capitalize()}.")
 
-        # Deduct money and add stocks
-        user_balances[user_id] -= total_cost
-        if user_id not in user_stocks:
-            user_stocks[user_id] = {}
-        user_stocks[user_id][stock_name] = user_stocks[user_id].get(stock_name, 0) + amount
-
-        await ctx.send(f"{ctx.author.name} bought {amount} shares of {stock_name} for ${total_cost}.")
-    elif action == 'sell':
-        if stock_name not in stock_prices:
-            await ctx.send("Invalid stock name!")
-            return
-        if amount is None or amount <= 0:
-            await ctx.send("You must specify a valid number of stocks to sell!")
-            return
-
-        # Check if the user owns enough stocks to sell
-        if user_stocks.get(user_id, {}).get(stock_name, 0) < amount:
-            await ctx.send("You don't have enough stocks to sell!")
-            return
-
-        total_gain = stock_prices[stock_name] * amount
-
-        # Add money and remove stocks
-        user_balances[user_id] += total_gain
-        user_stocks[user_id][stock_name] -= amount
-        if user_stocks[user_id][stock_name] == 0:
-            del user_stocks[user_id][stock_name]  # Remove stock if 0
-
-        await ctx.send(f"{ctx.author.name} sold {amount} shares of {stock_name} for ${total_gain}.")
-    else:
-        await ctx.send("Invalid action! Use 'check', 'buy', or 'sell'.")
-
-@bot.command(name='gamble')
-async def gamble(ctx, amount: int):
+@bot.command(name='sellstock')
+async def sellstock(ctx, stock_name: str, amount: int):
+    stocks = {"apple": 175.54}
     user_id = str(ctx.author.id)
 
-    # Ensure the amount is positive
-    if amount <= 0:
-        await ctx.send("You must gamble a positive amount!")
+    total_value = stocks[stock_name.lower()] * amount
+    set_user_balance(user_id, get_user_balance(user_id) + total_value)
+    await ctx.send(f"Sold {amount} shares of {stock_name.capitalize()}.")
+
+@bot.command(name='suggestion')
+async def suggestion(ctx, *, suggestion_text: str):
+    user_suggestions[str(ctx.author.id)] = suggestion_text
+    save_data(SUGGESTIONS_FILE, user_suggestions)
+    await ctx.send(f"Suggestion recorded: {suggestion_text}")
+
+@bot.command(name='ranks')
+async def ranks(ctx):
+    if not user_balances:
+        await ctx.send("No one has any money yet!")
         return
 
-    # Check if user has enough money to gamble
-    if user_balances.get(user_id, 0) < amount:
-        await ctx.send("You don't have enough money to gamble!")
-        return
+    sorted_balances = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)
+    leaderboard = "**Leaderboard - Top Users by Balance:**\n"
+    for rank, (user_id, balance) in enumerate(sorted_balances, 1):
+        user = await bot.fetch_user(int(user_id))
+        leaderboard += f"{rank}. {user.name}: ${balance}\n"
 
-    # Deduct the amount from user's balance
-    user_balances[user_id] -= amount
+    await ctx.send(leaderboard)
 
-    # 50% chance of getting nothing, 12.5% chance of breaking even, 12.5% chance of doubling the amount
-    result = random.choices(
-        ['lose', 'break_even', 'double'],
-        [0.75, 0.125, 0.125],  # Probabilities
-        k=1
-    )[0]
-
-    if result == 'lose':
-        await ctx.send(f"{ctx.author.name} gambled ${amount} and lost it all!")
-    elif result == 'break_even':
-        user_balances[user_id] += amount  # Return the original amount
-        await ctx.send(f"{ctx.author.name} gambled ${amount} and broke even!")
-    elif result == 'double':
-        user_balances[user_id] += amount * 2  # Double the amount
-        await ctx.send(f"{ctx.author.name} gambled ${amount} and won ${amount * 2}!")
-
-@bot.command(name='help')
-async def help_command(ctx):
-    help_message = """
-    **Available Commands:**
-    >beg - Beg for money and receive a random amount.
-    >bank - Check your current balance.
-    >slots - Play slots for $10. Win random rewards.
-    >give [user] [amount] - Give a user some money.
-    >stock check - Check current stock prices.
-    >stock buy [stock_name] [amount] - Buy stocks.
-    >stock sell [stock_name] [amount] - Sell stocks.
-    >gamble [amount] - Gamble an amount with a chance to lose or double it.
-    """
-    await ctx.send(help_message)
-
-# Your actual bot token
-bot.run("YOUR_BOT_TOKEN_HERE")  # <- Your token here
+bot.run('YOUR_BOT_TOKEN_HERE')
